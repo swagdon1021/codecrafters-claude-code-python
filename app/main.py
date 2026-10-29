@@ -58,38 +58,47 @@ def main():
     
     messages = []
     
+    # 1. System message
     if skills:
         system_content = "You have access to the following skills:\n\n"
         for s_data in skills.values():
             system_content += f"- {s_data['name']}: {s_data['description']}\n"
         messages.append({"role": "system", "content": system_content.strip()})
 
+    # 2. Parse stacked skills
     user_content = args.p
-    if user_content.startswith("/"):
-        command_parts = user_content.split(maxsplit=1)
-        skill_key = command_parts[0][1:] # Remove '/'
+    tokens = user_content.split()
+    invoked_skills = []
+    arg_tokens = []
+    
+    for i, token in enumerate(tokens):
+        if token.startswith("/") and len(token) > 1:
+            skill_name = token[1:]
+            if skill_name in skills:
+                invoked_skills.append(skill_name)
+                continue
+        # The first token that doesn't match a valid skill stops expansion
+        arg_tokens = tokens[i:]
+        break
         
-        if skill_key in skills:
-            body = skills[skill_key]["body"]
-            
-            # Argument substitution logic
-            args_str = command_parts[1] if len(command_parts) > 1 else ""
-            args_list = args_str.split()
+    # 3. Apply argument text to all invoked skills
+    if invoked_skills:
+        args_str = " ".join(arg_tokens)
+        
+        for skill_name in invoked_skills:
+            body = skills[skill_name]["body"]
             
             def replace_indexed(match):
                 idx = int(match.group(1))
-                return args_list[idx] if idx < len(args_list) else ""
+                return arg_tokens[idx] if idx < len(arg_tokens) else ""
             
-            # Prothome $ARGUMENTS[N] replace koro, nahole pore $ARGUMENTS er sathe conflict hobe
             body = re.sub(r'\$ARGUMENTS\[(\d+)\]', replace_indexed, body)
-            # Tarpor $ARGUMENTS replace koro
             body = body.replace("$ARGUMENTS", args_str)
-            # Sesh e $N replace koro
             body = re.sub(r'\$(\d+)', replace_indexed, body)
             
-            user_content = body
-
-    messages.append({"role": "user", "content": user_content})
+            messages.append({"role": "user", "content": body})
+    else:
+        messages.append({"role": "user", "content": user_content})
 
     tools = [
         {
