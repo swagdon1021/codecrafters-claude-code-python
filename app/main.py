@@ -30,19 +30,121 @@ def load_skills():
                     
                     name = skill_name
                     desc = ""
+                    context_val = ""
                     for line in frontmatter.split("\n"):
                         line = line.strip()
                         if line.startswith("name:"):
                             name = line.replace("name:", "").strip()
                         elif line.startswith("description:"):
                             desc = line.replace("description:", "").strip()
+                        elif line.startswith("context:"):
+                            context_val = line.replace("context:", "").strip()
                             
                     skills[skill_name] = {
                         "name": name,
                         "description": desc,
+                        "context": context_val,
                         "body": body
                     }
     return skills
+
+def run_agent_loop(client, messages, skills, tools):
+    while True:
+        chat = client.chat.completions.create(
+            model="anthropic/claude-haiku-4.5",
+            messages=messages,
+            tools=tools,
+        )
+
+        if not chat.choices or len(chat.choices) == 0:
+            raise RuntimeError("no choices in response")
+
+        message = chat.choices[0].message
+        messages.append(message)
+
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+                tool_content = ""
+                
+                if tool_name == "Skill":
+                    skill_req_name = arguments.get("name")
+                    skill_args_str = arguments.get("args", "")
+                    if skill_args_str is None:
+                        skill_args_str = ""
+                        
+                    if skill_req_name in skills:
+                        skill_data = skills[skill_req_name]
+                        body = skill_data["body"]
+                        call_arg_tokens = skill_args_str.split()
+                        
+                        def replace_tool_indexed(match):
+                            idx = int(match.group(1))
+                            return call_arg_tokens[idx] if idx < len(call_arg_tokens) else ""
+                        
+                        body = re.sub(r'\$ARGUMENTS\[(\d+)\]', replace_tool_indexed, body)
+                        body = body.replace("$ARGUMENTS", skill_args_str)
+                        body = re.sub(r'\$(\d+)', replace_tool_indexed, body)
+                        
+                        if skill_data.get("context") == "fork":
+                            # Start subagent conversation
+                            sub_messages = [{"role": "user", "content": body}]
+                            sub_result = run_agent_loop(client, sub_messages, skills, tools)
+                            tool_content = f"Skill {skill_req_name} ran in a separate context and returned: {sub_result}"
+                        else:
+                            prefix = f"Skill: {skill_req_name} (located at .claude/skills/{skill_req_name})\nPaths in the instructions below are relative to that folder.\n\n"
+                            tool_content = prefix + body
+                    else:
+                        tool_content = f"Skill '{skill_req_name}' not found."
+
+                elif tool_name == "Read":
+                    file_path = arguments.get("file_path")
+                    try:
+                        with open(file_path, "r") as f:
+                            tool_content = f.read()
+                    except Exception as e:
+                        tool_content = f"Error reading file: {e}"
+                        print(f"Error reading file: {e}", file=sys.stderr)
+                        
+                elif tool_name == "Write":
+                    file_path = arguments.get("file_path")
+                    content = arguments.get("content")
+                    try:
+                        dir_name = os.path.dirname(file_path)
+                        if dir_name:
+                            os.makedirs(dir_name, exist_ok=True)
+                        with open(file_path, "w") as f:
+                            f.write(content)
+                        tool_content = "File written successfully."
+                    except Exception as e:
+                        tool_content = f"Error writing file: {e}"
+                        print(f"Error writing file: {e}", file=sys.stderr)
+                        
+                elif tool_name == "Bash":
+                    command = arguments.get("command")
+                    try:
+                        result = subprocess.run(
+                            command, 
+                            shell=True, 
+                            capture_output=True, 
+                            text=True
+                        )
+                        if result.returncode == 0:
+                            tool_content = result.stdout if result.stdout else "Command executed successfully."
+                        else:
+                            tool_content = result.stderr if result.stderr else f"Command failed with exit code {result.returncode}."
+                    except Exception as e:
+                        tool_content = f"Error executing command: {e}"
+                        print(f"Error executing command: {e}", file=sys.stderr)
+                
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_content,
+                })
+        else:
+            return message.content if message.content else ""
 
 def main():
     p = argparse.ArgumentParser()
@@ -58,7 +160,6 @@ def main():
     
     messages = []
     
-    # Updated System Prompt to advertise the Skill tool
     if skills:
         system_content = "You have access to the following skills:\n\n"
         for s_data in skills.values():
@@ -101,7 +202,6 @@ def main():
     else:
         messages.append({"role": "user", "content": user_content})
 
-    # Added Skill tool to the tools array
     tools = [
         {
             "type": "function",
@@ -177,98 +277,8 @@ def main():
 
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    while True:
-        chat = client.chat.completions.create(
-            model="anthropic/claude-haiku-4.5",
-            messages=messages,
-            tools=tools,
-        )
-
-        if not chat.choices or len(chat.choices) == 0:
-            raise RuntimeError("no choices in response")
-
-        message = chat.choices[0].message
-        messages.append(message)
-
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            for tool_call in message.tool_calls:
-                tool_name = tool_call.function.name
-                arguments = json.loads(tool_call.function.arguments)
-                tool_content = ""
-                
-                # Executing the Skill Tool
-                if tool_name == "Skill":
-                    skill_req_name = arguments.get("name")
-                    skill_args_str = arguments.get("args", "")
-                    if skill_args_str is None:
-                        skill_args_str = ""
-                        
-                    if skill_req_name in skills:
-                        body = skills[skill_req_name]["body"]
-                        call_arg_tokens = skill_args_str.split()
-                        
-                        def replace_tool_indexed(match):
-                            idx = int(match.group(1))
-                            return call_arg_tokens[idx] if idx < len(call_arg_tokens) else ""
-                        
-                        body = re.sub(r'\$ARGUMENTS\[(\d+)\]', replace_tool_indexed, body)
-                        body = body.replace("$ARGUMENTS", skill_args_str)
-                        body = re.sub(r'\$(\d+)', replace_tool_indexed, body)
-                        
-                        prefix = f"Skill: {skill_req_name} (located at .claude/skills/{skill_req_name})\nPaths in the instructions below are relative to that folder.\n\n"
-                        tool_content = prefix + body
-                    else:
-                        tool_content = f"Skill '{skill_req_name}' not found."
-
-                elif tool_name == "Read":
-                    file_path = arguments.get("file_path")
-                    try:
-                        with open(file_path, "r") as f:
-                            tool_content = f.read()
-                    except Exception as e:
-                        tool_content = f"Error reading file: {e}"
-                        print(f"Error reading file: {e}", file=sys.stderr)
-                        
-                elif tool_name == "Write":
-                    file_path = arguments.get("file_path")
-                    content = arguments.get("content")
-                    try:
-                        dir_name = os.path.dirname(file_path)
-                        if dir_name:
-                            os.makedirs(dir_name, exist_ok=True)
-                        with open(file_path, "w") as f:
-                            f.write(content)
-                        tool_content = "File written successfully."
-                    except Exception as e:
-                        tool_content = f"Error writing file: {e}"
-                        print(f"Error writing file: {e}", file=sys.stderr)
-                        
-                elif tool_name == "Bash":
-                    command = arguments.get("command")
-                    try:
-                        result = subprocess.run(
-                            command, 
-                            shell=True, 
-                            capture_output=True, 
-                            text=True
-                        )
-                        if result.returncode == 0:
-                            tool_content = result.stdout if result.stdout else "Command executed successfully."
-                        else:
-                            tool_content = result.stderr if result.stderr else f"Command failed with exit code {result.returncode}."
-                    except Exception as e:
-                        tool_content = f"Error executing command: {e}"
-                        print(f"Error executing command: {e}", file=sys.stderr)
-                
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": tool_content,
-                })
-        else:
-            if message.content:
-                print(message.content)
-            break
+    final_response = run_agent_loop(client, messages, skills, tools)
+    print(final_response)
 
 if __name__ == "__main__":
     main()
