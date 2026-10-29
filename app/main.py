@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import subprocess
 
 from openai import OpenAI
 
@@ -58,6 +59,23 @@ def main():
                     }
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Bash",
+                "description": "Execute a shell command",
+                "parameters": {
+                    "type": "object",
+                    "required": ["command"],
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The command to execute"
+                        }
+                    }
+                }
+            }
         }
     ]
 
@@ -96,7 +114,6 @@ def main():
                     file_path = arguments.get("file_path")
                     content = arguments.get("content")
                     try:
-                        # Jodi folder age theke toiri na thake tahole toiri kore nebe
                         dir_name = os.path.dirname(file_path)
                         if dir_name:
                             os.makedirs(dir_name, exist_ok=True)
@@ -107,6 +124,23 @@ def main():
                     except Exception as e:
                         tool_content = f"Error writing file: {e}"
                         print(f"Error writing file: {e}", file=sys.stderr)
+                        
+                elif tool_name == "Bash":
+                    command = arguments.get("command")
+                    try:
+                        result = subprocess.run(
+                            command, 
+                            shell=True, 
+                            capture_output=True, 
+                            text=True
+                        )
+                        if result.returncode == 0:
+                            tool_content = result.stdout if result.stdout else "Command executed successfully."
+                        else:
+                            tool_content = result.stderr if result.stderr else f"Command failed with exit code {result.returncode}."
+                    except Exception as e:
+                        tool_content = f"Error executing command: {e}"
+                        print(f"Error executing command: {e}", file=sys.stderr)
                 
                 messages.append({
                     "role": "tool",
