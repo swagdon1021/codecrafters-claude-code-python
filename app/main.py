@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 
@@ -47,7 +48,27 @@ def main():
 
     print("Logs from your program will appear here!", file=sys.stderr)
     
-    print(chat.choices[0].message.content)
+    message = chat.choices[0].message
+
+    # Check if the LLM made a tool call
+    if hasattr(message, 'tool_calls') and message.tool_calls:
+        tool_call = message.tool_calls[0]
+        
+        # Parse the JSON arguments
+        arguments = json.loads(tool_call.function.arguments)
+        file_path = arguments.get("file_path")
+        
+        # Read and print exact file contents
+        try:
+            with open(file_path, "r") as f:
+                print(f.read(), end="")
+        except Exception as e:
+            print(f"Error reading file: {e}", file=sys.stderr)
+            
+    else:
+        # If no tool call, print the regular text response
+        if message.content:
+            print(message.content)
 
 
 if __name__ == "__main__":
