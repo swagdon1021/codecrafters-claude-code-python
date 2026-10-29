@@ -19,7 +19,6 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    # 1. Initialize messages array
     messages = [{"role": "user", "content": args.p}]
     tools = [
         {
@@ -38,12 +37,32 @@ def main():
                     "required": ["file_path"],
                 },
             },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "Write",
+                "description": "Write content to a file",
+                "parameters": {
+                    "type": "object",
+                    "required": ["file_path", "content"],
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path of the file to write to"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file"
+                        }
+                    }
+                }
+            }
         }
     ]
 
     print("Logs from your program will appear here!", file=sys.stderr)
 
-    # 2. Enter the agent loop
     while True:
         chat = client.chat.completions.create(
             model="anthropic/claude-haiku-4.5",
@@ -56,30 +75,45 @@ def main():
 
         message = chat.choices[0].message
         
-        # 3. Append assistant's response to messages history
         messages.append(message)
 
-        # 4. Handle tool calls or break loop
         if hasattr(message, "tool_calls") and message.tool_calls:
             for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
                 arguments = json.loads(tool_call.function.arguments)
-                file_path = arguments.get("file_path")
+                tool_content = ""
                 
-                try:
-                    with open(file_path, "r") as f:
-                        file_content = f.read()
-                except Exception as e:
-                    file_content = f"Error reading file: {e}"
-                    print(f"Error reading file: {e}", file=sys.stderr)
+                if tool_name == "Read":
+                    file_path = arguments.get("file_path")
+                    try:
+                        with open(file_path, "r") as f:
+                            tool_content = f.read()
+                    except Exception as e:
+                        tool_content = f"Error reading file: {e}"
+                        print(f"Error reading file: {e}", file=sys.stderr)
+                        
+                elif tool_name == "Write":
+                    file_path = arguments.get("file_path")
+                    content = arguments.get("content")
+                    try:
+                        # Jodi folder age theke toiri na thake tahole toiri kore nebe
+                        dir_name = os.path.dirname(file_path)
+                        if dir_name:
+                            os.makedirs(dir_name, exist_ok=True)
+                            
+                        with open(file_path, "w") as f:
+                            f.write(content)
+                        tool_content = "File written successfully."
+                    except Exception as e:
+                        tool_content = f"Error writing file: {e}"
+                        print(f"Error writing file: {e}", file=sys.stderr)
                 
-                # Append tool result back to messages
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": file_content,
+                    "content": tool_content,
                 })
         else:
-            # 5. No more tool calls, print final response and exit
             if message.content:
                 print(message.content)
             break
