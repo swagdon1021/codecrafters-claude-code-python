@@ -9,6 +9,39 @@ from openai import OpenAI
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
+def load_skills():
+    skills = {}
+    skills_dir = ".claude/skills"
+    if not os.path.exists(skills_dir):
+        return skills
+        
+    for skill_name in os.listdir(skills_dir):
+        skill_path = os.path.join(skills_dir, skill_name, "SKILL.md")
+        if os.path.isfile(skill_path):
+            with open(skill_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1].strip()
+                    body = parts[2].strip()
+                    
+                    name = skill_name
+                    desc = ""
+                    for line in frontmatter.split("\n"):
+                        line = line.strip()
+                        if line.startswith("name:"):
+                            name = line.replace("name:", "").strip()
+                        elif line.startswith("description:"):
+                            desc = line.replace("description:", "").strip()
+                            
+                    skills[skill_name] = {
+                        "name": name,
+                        "description": desc,
+                        "body": body
+                    }
+    return skills
 
 def main():
     p = argparse.ArgumentParser()
@@ -20,7 +53,29 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    messages = [{"role": "user", "content": args.p}]
+    # 1. Parse skills from disk
+    skills = load_skills()
+    
+    messages = []
+    
+    # 2. Add system prompt for skills (Level 1 disclosure)
+    if skills:
+        system_content = "You have access to the following skills:\n\n"
+        for s_data in skills.values():
+            system_content += f"- {s_data['name']}: {s_data['description']}\n"
+        messages.append({"role": "system", "content": system_content.strip()})
+
+    # 3. Handle slash command vs normal prompt (Level 2 disclosure)
+    user_content = args.p
+    if user_content.startswith("/"):
+        command_parts = user_content.split(maxsplit=1)
+        skill_key = command_parts[0][1:] # Remove '/'
+        
+        if skill_key in skills:
+            user_content = skills[skill_key]["body"]
+            
+    messages.append({"role": "user", "content": user_content})
+
     tools = [
         {
             "type": "function",
@@ -92,7 +147,6 @@ def main():
             raise RuntimeError("no choices in response")
 
         message = chat.choices[0].message
-        
         messages.append(message)
 
         if hasattr(message, "tool_calls") and message.tool_calls:
@@ -117,7 +171,6 @@ def main():
                         dir_name = os.path.dirname(file_path)
                         if dir_name:
                             os.makedirs(dir_name, exist_ok=True)
-                            
                         with open(file_path, "w") as f:
                             f.write(content)
                         tool_content = "File written successfully."
@@ -151,7 +204,6 @@ def main():
             if message.content:
                 print(message.content)
             break
-
 
 if __name__ == "__main__":
     main()
