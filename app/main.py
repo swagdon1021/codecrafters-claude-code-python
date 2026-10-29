@@ -26,10 +26,9 @@ def main():
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
-    
     print("Logs from your program will appear here!", file=sys.stderr)
-
     
+    print(chat.choices[0].message.content)
 
 
 if __name__ == "__main__":
