@@ -58,14 +58,14 @@ def main():
     
     messages = []
     
-    # 1. System message
+    # Updated System Prompt to advertise the Skill tool
     if skills:
         system_content = "You have access to the following skills:\n\n"
         for s_data in skills.values():
             system_content += f"- {s_data['name']}: {s_data['description']}\n"
+        system_content += "\nIf a skill matches the user's request, call the Skill tool with its name\nand follow the instructions it returns."
         messages.append({"role": "system", "content": system_content.strip()})
 
-    # 2. Parse stacked skills
     user_content = args.p
     tokens = user_content.split()
     invoked_skills = []
@@ -77,11 +77,9 @@ def main():
             if skill_name in skills:
                 invoked_skills.append(skill_name)
                 continue
-        # The first token that doesn't match a valid skill stops expansion
         arg_tokens = tokens[i:]
         break
         
-    # 3. Apply argument text to all invoked skills
     if invoked_skills:
         args_str = " ".join(arg_tokens)
         
@@ -96,11 +94,30 @@ def main():
             body = body.replace("$ARGUMENTS", args_str)
             body = re.sub(r'\$(\d+)', replace_indexed, body)
             
-            messages.append({"role": "user", "content": body})
+            prefix = f"Skill: {skill_name} (located at .claude/skills/{skill_name})\nPaths in the instructions below are relative to that folder.\n\n"
+            full_content = prefix + body
+            
+            messages.append({"role": "user", "content": full_content})
     else:
         messages.append({"role": "user", "content": user_content})
 
+    # Added Skill tool to the tools array
     tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "Skill",
+                "description": "Load a skill's instructions into the conversation",
+                "parameters": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "The name of the skill to use" },
+                        "args": { "type": "string", "description": "Optional arguments for the skill" }
+                    }
+                }
+            }
+        },
         {
             "type": "function",
             "function": {
@@ -179,7 +196,31 @@ def main():
                 arguments = json.loads(tool_call.function.arguments)
                 tool_content = ""
                 
-                if tool_name == "Read":
+                # Executing the Skill Tool
+                if tool_name == "Skill":
+                    skill_req_name = arguments.get("name")
+                    skill_args_str = arguments.get("args", "")
+                    if skill_args_str is None:
+                        skill_args_str = ""
+                        
+                    if skill_req_name in skills:
+                        body = skills[skill_req_name]["body"]
+                        call_arg_tokens = skill_args_str.split()
+                        
+                        def replace_tool_indexed(match):
+                            idx = int(match.group(1))
+                            return call_arg_tokens[idx] if idx < len(call_arg_tokens) else ""
+                        
+                        body = re.sub(r'\$ARGUMENTS\[(\d+)\]', replace_tool_indexed, body)
+                        body = body.replace("$ARGUMENTS", skill_args_str)
+                        body = re.sub(r'\$(\d+)', replace_tool_indexed, body)
+                        
+                        prefix = f"Skill: {skill_req_name} (located at .claude/skills/{skill_req_name})\nPaths in the instructions below are relative to that folder.\n\n"
+                        tool_content = prefix + body
+                    else:
+                        tool_content = f"Skill '{skill_req_name}' not found."
+
+                elif tool_name == "Read":
                     file_path = arguments.get("file_path")
                     try:
                         with open(file_path, "r") as f:
