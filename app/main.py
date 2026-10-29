@@ -19,56 +19,70 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    chat = client.chat.completions.create(
-        model="anthropic/claude-haiku-4.5",
-        messages=[{"role": "user", "content": args.p}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "Read",
-                    "description": "Read and return the contents of a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "The path to the file to read",
-                            }
-                        },
-                        "required": ["file_path"],
+    # 1. Initialize messages array
+    messages = [{"role": "user", "content": args.p}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "Read",
+                "description": "Read and return the contents of a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file to read",
+                        }
                     },
+                    "required": ["file_path"],
                 },
-            }
-        ],
-    )
-
-    if not chat.choices or len(chat.choices) == 0:
-        raise RuntimeError("no choices in response")
+            },
+        }
+    ]
 
     print("Logs from your program will appear here!", file=sys.stderr)
-    
-    message = chat.choices[0].message
 
-    # Check if the LLM made a tool call
-    if hasattr(message, 'tool_calls') and message.tool_calls:
-        tool_call = message.tool_calls[0]
+    # 2. Enter the agent loop
+    while True:
+        chat = client.chat.completions.create(
+            model="anthropic/claude-haiku-4.5",
+            messages=messages,
+            tools=tools,
+        )
+
+        if not chat.choices or len(chat.choices) == 0:
+            raise RuntimeError("no choices in response")
+
+        message = chat.choices[0].message
         
-        # Parse the JSON arguments
-        arguments = json.loads(tool_call.function.arguments)
-        file_path = arguments.get("file_path")
-        
-        # Read and print exact file contents
-        try:
-            with open(file_path, "r") as f:
-                print(f.read(), end="")
-        except Exception as e:
-            print(f"Error reading file: {e}", file=sys.stderr)
-            
-    else:
-        # If no tool call, print the regular text response
-        if message.content:
-            print(message.content)
+        # 3. Append assistant's response to messages history
+        messages.append(message)
+
+        # 4. Handle tool calls or break loop
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tool_call in message.tool_calls:
+                arguments = json.loads(tool_call.function.arguments)
+                file_path = arguments.get("file_path")
+                
+                try:
+                    with open(file_path, "r") as f:
+                        file_content = f.read()
+                except Exception as e:
+                    file_content = f"Error reading file: {e}"
+                    print(f"Error reading file: {e}", file=sys.stderr)
+                
+                # Append tool result back to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": file_content,
+                })
+        else:
+            # 5. No more tool calls, print final response and exit
+            if message.content:
+                print(message.content)
+            break
 
 
 if __name__ == "__main__":
