@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import subprocess
 
@@ -53,27 +54,41 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    # 1. Parse skills from disk
     skills = load_skills()
     
     messages = []
     
-    # 2. Add system prompt for skills (Level 1 disclosure)
     if skills:
         system_content = "You have access to the following skills:\n\n"
         for s_data in skills.values():
             system_content += f"- {s_data['name']}: {s_data['description']}\n"
         messages.append({"role": "system", "content": system_content.strip()})
 
-    # 3. Handle slash command vs normal prompt (Level 2 disclosure)
     user_content = args.p
     if user_content.startswith("/"):
         command_parts = user_content.split(maxsplit=1)
         skill_key = command_parts[0][1:] # Remove '/'
         
         if skill_key in skills:
-            user_content = skills[skill_key]["body"]
+            body = skills[skill_key]["body"]
             
+            # Argument substitution logic
+            args_str = command_parts[1] if len(command_parts) > 1 else ""
+            args_list = args_str.split()
+            
+            def replace_indexed(match):
+                idx = int(match.group(1))
+                return args_list[idx] if idx < len(args_list) else ""
+            
+            # Prothome $ARGUMENTS[N] replace koro, nahole pore $ARGUMENTS er sathe conflict hobe
+            body = re.sub(r'\$ARGUMENTS\[(\d+)\]', replace_indexed, body)
+            # Tarpor $ARGUMENTS replace koro
+            body = body.replace("$ARGUMENTS", args_str)
+            # Sesh e $N replace koro
+            body = re.sub(r'\$(\d+)', replace_indexed, body)
+            
+            user_content = body
+
     messages.append({"role": "user", "content": user_content})
 
     tools = [
